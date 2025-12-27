@@ -190,7 +190,7 @@ def employee_dashboard(auth):
     q = st.text_input("Ask a question (e.g. How can I improve?)")
 
     if q:
-    payload = build_llm_payload(row, user_question=q)
+        payload = build_llm_payload(row, user_question=q)
 
     with st.spinner("Generating personalised feedback..."):
         ai_text = llm_rewrite(payload)
