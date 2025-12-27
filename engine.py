@@ -452,7 +452,7 @@ if OpenAI is not None and OPENROUTER_API_KEY:
         # NOTE: headers are optional; many people include them
         default_headers={
             "HTTP-Referer": os.getenv("APP_URL", "http://localhost"),
-            "X-Title": os.getenv("APP_NAME", "employee-performance-ai"),
+            "X-Title": os.getenv("APP_NAME", "ai-employee-performance"),
         },
     )
 
