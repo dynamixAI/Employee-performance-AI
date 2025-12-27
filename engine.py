@@ -18,7 +18,7 @@ else:
 # =====================================================
 # 1) AUTH + PASSWORDS (Streamlit-safe)
 # =====================================================
-# ✅ ADDED: Missing password helpers that your file already calls
+#  ADDED: Missing password helpers that your file already calls
 PASSWORD_POLICY = {
     "min_length": 8,
     "require_number": True,
@@ -66,7 +66,7 @@ def _seed_users():
     if not users_df.empty:
         return
 
-    # ✅ CHANGE: Admin is the ONLY default account.
+    #  CHANGE: Admin is the ONLY default account.
     # Managers and employees MUST be created by admin via admin_create_user().
     users_df = pd.DataFrame([
         {
@@ -598,7 +598,7 @@ def prepare_standard_df(raw_df: pd.DataFrame,
 # =====================================================
 # 9) ROLE ROUTING (EMPLOYEE vs MANAGER) – Streamlit calls this
 # =====================================================
-# ✅ CHANGED: stop guessing role from prefix. Use admin assignments in users_df.
+# stop guessing role from prefix. Use admin assignments in users_df.
 
 def get_user_context(user_id: str) -> Dict[str, Any]:
     user_id = (user_id or "").strip()
@@ -614,7 +614,7 @@ def get_user_context(user_id: str) -> Dict[str, Any]:
         "user_id": row["user_id"],
     }
 
-# ✅ ADDED: Identity → Data resolvers (Admin-controlled access)
+#  Identity → Data resolvers (Admin-controlled access)
 def get_employee_row(df: pd.DataFrame, data_employee_id: Any) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
@@ -813,11 +813,31 @@ def manager_ai_summary(df: pd.DataFrame) -> str:
     text = clean_ai_text(text or "")
     return text if text else "[AI returned empty response]"
 
+# =====================================================
+# ADMIN: VIEW USER REGISTRY (SAFE)
+# =====================================================
+def admin_list_users() -> pd.DataFrame:
+    """
+    Returns a safe view of users (no passwords).
+    """
+    if users_df.empty:
+        return pd.DataFrame()
+
+    cols = [
+        "user_id",
+        "role",
+        "data_employee_id",
+        "data_scope_type",
+        "data_scope_value",
+    ]
+    return users_df[cols].copy()
+
+
 
 # =====================================================
 # 11) AUTO-ENRICH LOADED CSV (SAFE)
 # =====================================================
-# ✅ ADDED: If your CSV is "raw" (missing computed columns), enrich it at startup.
+#  ADDED: If your CSV is "raw" (missing computed columns), enrich it at startup.
 if standard_df is not None and not standard_df.empty:
     required = ["employee_id", "sector", "quality_score", "development_score", "date"]
     has_minimum = all(col in standard_df.columns for col in required)
