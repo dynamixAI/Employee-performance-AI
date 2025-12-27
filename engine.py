@@ -18,90 +18,125 @@ else:
 # =====================================================
 # 1) AUTH + PASSWORDS (Streamlit-safe)
 # =====================================================
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+# =====================================================
+# USER REGISTRY — ADMIN IS SOURCE OF TRUTH
+# =====================================================
+# user_id: login identifier
+# role: admin | manager | employee
+# data_employee_id: links user to dataset (employees)
+# data_scope_type / value: manager access control
 
-def verify_password(password: str, password_hash: str) -> bool:
-    return hash_password(password) == password_hash
-
-PASSWORD_POLICY = {
-    "min_length": 8,
-    "require_number": True,
-    "require_special": True,
-}
-
-def validate_password(password: str) -> List[str]:
-    errors = []
-    if len(password) < PASSWORD_POLICY["min_length"]:
-        errors.append(f"Password must be at least {PASSWORD_POLICY['min_length']} characters.")
-    if PASSWORD_POLICY["require_number"] and not re.search(r"\d", password):
-        errors.append("Password must contain at least one number.")
-    if PASSWORD_POLICY["require_special"] and not re.search(r"[!@#$%^&*]", password):
-        errors.append("Password must contain at least one special character (!@#$%^&*).")
-    return errors
-
-users_df = pd.DataFrame(columns=["user_id", "role", "password_hash"])
+users_df = pd.DataFrame(
+    columns=[
+        "user_id",
+        "role",
+        "password_hash",
+        "data_employee_id",
+        "data_scope_type",
+        "data_scope_value",
+    ]
+)
 
 def _seed_users():
     global users_df
-    if users_df.empty:
-        users_df = pd.DataFrame([
-            {"user_id": "ADM-01", "role": "admin", "password_hash": hash_password("Admin@123")},
-            {"user_id": "MGR-001", "role": "manager", "password_hash": hash_password("Manager@123")},
-            {"user_id": "EMP-1", "role": "employee", "password_hash": hash_password("Employee@123")},
-        ])
+    if not users_df.empty:
+        return
+
+    users_df = pd.DataFrame([
+        {
+            "user_id": "ADM-01",
+            "role": "admin",
+            "password_hash": hash_password("Admin@123"),
+            "data_employee_id": None,
+            "data_scope_type": None,
+            "data_scope_value": None,
+        },
+        {
+            "user_id": "MGR-001",
+            "role": "manager",
+            "password_hash": hash_password("Manager@123"),
+            "data_employee_id": None,
+            "data_scope_type": "department",
+            "data_scope_value": "IT",
+        },
+        {
+            "user_id": "EMP-AX92",
+            "role": "employee",
+            "password_hash": hash_password("Employee@123"),
+            "data_employee_id": "1047",
+            "data_scope_type": None,
+            "data_scope_value": None,
+        },
+    ])
 
 _seed_users()
 
-def authenticate_user(user_id: str, password: str) -> Optional[str]:
+def authenticate_user(user_id: str, password: str) -> Optional[Dict[str, Any]]:
     row = users_df[users_df["user_id"] == user_id]
     if row.empty:
         return None
-    stored_hash = row.iloc[0]["password_hash"]
-    return row.iloc[0]["role"] if verify_password(password, stored_hash) else None
 
-def create_user(user_id: str, role: str, password: str) -> Dict[str, Any]:
+    row = row.iloc[0]
+    if not verify_password(password, row["password_hash"]):
+        return None
+
+    return {
+        "user_id": row["user_id"],
+        "role": row["role"],
+        "data_employee_id": row["data_employee_id"],
+        "data_scope_type": row["data_scope_type"],
+        "data_scope_value": row["data_scope_value"],
+    }
+
+def admin_create_user(
+    user_id: str,
+    role: str,
+    password: str,
+    data_employee_id: Optional[str] = None,
+    data_scope_type: Optional[str] = None,
+    data_scope_value: Optional[Any] = None,
+) -> Dict[str, Any]:
     global users_df
-    user_id = user_id.strip().upper()
 
-    if role not in ["employee", "manager", "admin"]:
+    if role not in ["admin", "manager", "employee"]:
         return {"success": False, "error": "Invalid role."}
+
     if user_id in users_df["user_id"].values:
         return {"success": False, "error": "User already exists."}
 
-    errs = validate_password(password)
-    if errs:
-        return {"success": False, "error": errs}
+    pw_errors = validate_password(password)
+    if pw_errors:
+        return {"success": False, "error": pw_errors}
 
     users_df = pd.concat([users_df, pd.DataFrame([{
         "user_id": user_id,
         "role": role,
         "password_hash": hash_password(password),
+        "data_employee_id": data_employee_id,
+        "data_scope_type": data_scope_type,
+        "data_scope_value": json.dumps(data_scope_value) if isinstance(data_scope_value, (list, dict)) else data_scope_value,
     }])], ignore_index=True)
+
     return {"success": True}
 
-def remove_user(user_id: str) -> Dict[str, Any]:
+def admin_remove_user(user_id: str) -> Dict[str, Any]:
     global users_df
-    user_id = user_id.strip().upper()
     if user_id not in users_df["user_id"].values:
         return {"success": False, "error": "User not found."}
     users_df = users_df[users_df["user_id"] != user_id]
     return {"success": True}
 
-def reset_password(user_id: str, new_password: str) -> Dict[str, Any]:
-    global users_df
-    user_id = user_id.strip().upper()
-
-    errs = validate_password(new_password)
-    if errs:
-        return {"success": False, "error": errs}
+def admin_reset_password(user_id: str, new_password: str) -> Dict[str, Any]:
+    pw_errors = validate_password(new_password)
+    if pw_errors:
+        return {"success": False, "error": pw_errors}
 
     idx = users_df.index[users_df["user_id"] == user_id]
     if len(idx) == 0:
         return {"success": False, "error": "User not found."}
+
     users_df.loc[idx, "password_hash"] = hash_password(new_password)
     return {"success": True}
-
 # =====================================================
 # 2) CANONICAL SCHEMA + AUTO-MAPPING (FROM YOUR COLAB)
 # =====================================================
