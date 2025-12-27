@@ -18,6 +18,30 @@ else:
 # =====================================================
 # 1) AUTH + PASSWORDS (Streamlit-safe)
 # =====================================================
+# ✅ ADDED: Missing password helpers that your file already calls
+PASSWORD_POLICY = {
+    "min_length": 8,
+    "require_number": True,
+    "require_special": True,
+}
+
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return hash_password(password) == password_hash
+
+def validate_password(password: str) -> List[str]:
+    errors = []
+    if len(password) < PASSWORD_POLICY["min_length"]:
+        errors.append(f"Password must be at least {PASSWORD_POLICY['min_length']} characters.")
+    if PASSWORD_POLICY["require_number"] and not re.search(r"\d", password):
+        errors.append("Password must contain at least one number.")
+    if PASSWORD_POLICY["require_special"] and not re.search(r"[!@#$%^&*]", password):
+        errors.append("Password must contain at least one special character (!@#$%^&*).")
+    return errors
+
+
 # =====================================================
 # USER REGISTRY — ADMIN IS SOURCE OF TRUTH
 # =====================================================
@@ -42,28 +66,14 @@ def _seed_users():
     if not users_df.empty:
         return
 
+    # ✅ CHANGE: Admin is the ONLY default account.
+    # Managers and employees MUST be created by admin via admin_create_user().
     users_df = pd.DataFrame([
         {
             "user_id": "ADM-01",
             "role": "admin",
             "password_hash": hash_password("Admin@123"),
             "data_employee_id": None,
-            "data_scope_type": None,
-            "data_scope_value": None,
-        },
-        {
-            "user_id": "MGR-001",
-            "role": "manager",
-            "password_hash": hash_password("Manager@123"),
-            "data_employee_id": None,
-            "data_scope_type": "department",
-            "data_scope_value": "IT",
-        },
-        {
-            "user_id": "EMP-AX92",
-            "role": "employee",
-            "password_hash": hash_password("Employee@123"),
-            "data_employee_id": "1047",
             "data_scope_type": None,
             "data_scope_value": None,
         },
@@ -137,6 +147,7 @@ def admin_reset_password(user_id: str, new_password: str) -> Dict[str, Any]:
 
     users_df.loc[idx, "password_hash"] = hash_password(new_password)
     return {"success": True}
+
 # =====================================================
 # 2) CANONICAL SCHEMA + AUTO-MAPPING (FROM YOUR COLAB)
 # =====================================================
@@ -471,8 +482,9 @@ def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = No
     if not isinstance(expl, dict):
         expl = generate_employee_explanation(employee_row)
 
+    # ✅ CHANGED: do NOT force int; allow string/UUID employee IDs
     return {
-        "employee_id": int(employee_row.get("employee_id")),
+        "employee_id": str(employee_row.get("employee_id")),
         "sector": str(employee_row.get("sector", "")),
         "role": str(employee_row.get("role", "")),
         "date": str(employee_row.get("date", "")),
@@ -586,15 +598,60 @@ def prepare_standard_df(raw_df: pd.DataFrame,
 # =====================================================
 # 9) ROLE ROUTING (EMPLOYEE vs MANAGER) – Streamlit calls this
 # =====================================================
+# ✅ CHANGED: stop guessing role from prefix. Use admin assignments in users_df.
+
 def get_user_context(user_id: str) -> Dict[str, Any]:
-    user_id = (user_id or "").strip().upper()
-    if user_id.startswith("EMP-"):
-        return {"role": "employee", "employee_id": int(user_id.replace("EMP-", ""))}
-    if user_id.startswith("MGR-"):
-        return {"role": "manager"}
-    if user_id.startswith("ADM-"):
-        return {"role": "admin"}
-    return {"role": "unknown"}
+    user_id = (user_id or "").strip()
+    row = users_df[users_df["user_id"] == user_id]
+    if row.empty:
+        return {"role": "unknown"}
+    row = row.iloc[0]
+    return {
+        "role": row["role"],
+        "data_employee_id": row["data_employee_id"],
+        "data_scope_type": row["data_scope_type"],
+        "data_scope_value": row["data_scope_value"],
+        "user_id": row["user_id"],
+    }
+
+# ✅ ADDED: Identity → Data resolvers (Admin-controlled access)
+def get_employee_row(df: pd.DataFrame, data_employee_id: Any) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    if "employee_id" not in df.columns:
+        return pd.DataFrame()
+    return df[df["employee_id"].astype(str) == str(data_employee_id)]
+
+def get_manager_scope_df(df: pd.DataFrame, scope_type: Any, scope_value: Any) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if scope_type == "department":
+        if "sector" not in df.columns:
+            return pd.DataFrame()
+        return df[df["sector"].astype(str) == str(scope_value)]
+
+    if scope_type == "employee_ids":
+        if isinstance(scope_value, str):
+            try:
+                scope_value = json.loads(scope_value)
+            except Exception:
+                scope_value = []
+        if "employee_id" not in df.columns:
+            return pd.DataFrame()
+        return df[df["employee_id"].astype(str).isin([str(x) for x in scope_value])]
+
+    return pd.DataFrame()
+
+def resolve_user_data_view(ctx: Dict[str, Any], df: pd.DataFrame) -> pd.DataFrame:
+    role = ctx.get("role")
+    if role == "employee":
+        return get_employee_row(df, ctx.get("data_employee_id"))
+    if role == "manager":
+        return get_manager_scope_df(df, ctx.get("data_scope_type"), ctx.get("data_scope_value"))
+    if role == "admin":
+        return df.copy()
+    return pd.DataFrame()
 
 def route_request(user_id: str, question: str, df: Optional[pd.DataFrame] = None) -> Any:
     """
@@ -607,11 +664,10 @@ def route_request(user_id: str, question: str, df: Optional[pd.DataFrame] = None
     ctx = get_user_context(user_id)
 
     if ctx["role"] == "employee":
-        emp_id = ctx["employee_id"]
-        row = df[df["employee_id"] == emp_id]
-        if row.empty:
-            return "Employee not found."
-        return answer_employee_question(row.iloc[0], question)
+        emp_df = resolve_user_data_view(ctx, df)
+        if emp_df.empty:
+            return "Employee not found (not assigned to data)."
+        return answer_employee_question(emp_df.iloc[0], question)
 
     if ctx["role"] in ["manager", "admin"]:
         return "Manager/Admin portal active."
@@ -677,7 +733,8 @@ def manager_coaching_actions(df: pd.DataFrame, top_n_needing_support: int = 20) 
         if not isinstance(expl, dict):
             expl = generate_employee_explanation(r)
         actions.append({
-            "employee_id": int(r.get("employee_id")),
+            # ✅ CHANGED: do NOT force int
+            "employee_id": str(r.get("employee_id")),
             "status": r.get("performance_status"),
             "drivers": expl.get("drivers", []),
             "recommended_actions": expl.get("recommended_actions", []),
@@ -756,3 +813,19 @@ def manager_ai_summary(df: pd.DataFrame) -> str:
     text = clean_ai_text(text or "")
     return text if text else "[AI returned empty response]"
 
+
+# =====================================================
+# 11) AUTO-ENRICH LOADED CSV (SAFE)
+# =====================================================
+# ✅ ADDED: If your CSV is "raw" (missing computed columns), enrich it at startup.
+if standard_df is not None and not standard_df.empty:
+    required = ["employee_id", "sector", "quality_score", "development_score", "date"]
+    has_minimum = all(col in standard_df.columns for col in required)
+
+    # If minimum canonical columns exist but derived columns do not, prepare/enrich.
+    if has_minimum and ("employee_explanation" not in standard_df.columns or "performance_status" not in standard_df.columns):
+        try:
+            standard_df, _ = prepare_standard_df(standard_df, mapping=None, record_date_value=None)
+        except Exception:
+            # Keep app alive even if enrichment fails; UI can show error.
+            pass
