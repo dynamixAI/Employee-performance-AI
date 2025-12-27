@@ -2,15 +2,19 @@ import streamlit as st
 import pandas as pd
 
 from engine import (
+    build_llm_payload,
+    llm_rewrite,
     authenticate_user,
     admin_create_user,
     admin_remove_user,
     admin_reset_password,
+    admin_list_users,
     resolve_user_data_view,
     standard_df,
     manager_ai_summary,
     answer_employee_question,
 )
+
 
 # -----------------------------------------------------
 # PAGE CONFIG
@@ -60,7 +64,7 @@ def admin_dashboard(auth):
 
     st.title("🛠️ Admin Dashboard")
 
-    tabs = st.tabs(["Create User", "Remove User", "Reset Password", "View Dataset"])
+    tabs = st.tabs(["Create User", "User Registry", "Remove User", "Reset Password", "View Dataset"])
 
     # -------------------------------
     # CREATE USER
@@ -112,6 +116,18 @@ def admin_dashboard(auth):
                 st.success("User created successfully")
             else:
                 st.error(result["error"])
+    # -------------------------------
+    # USER REGISTRY
+    # -------------------------------
+    with tabs[1]:
+        st.subheader("User Registry")
+
+        users_view = admin_list_users()
+
+        if users_view.empty:
+            st.info("No users in the system.")
+        else:
+            st.dataframe(users_view, use_container_width=True)
 
     # -------------------------------
     # REMOVE USER
@@ -174,12 +190,12 @@ def employee_dashboard(auth):
     q = st.text_input("Ask a question (e.g. How can I improve?)")
 
     if q:
-        answer = answer_employee_question(row, q)
-        if isinstance(answer, list):
-            for a in answer:
-                st.write("•", a)
-        else:
-            st.write(answer)
+    payload = build_llm_payload(row, user_question=q)
+
+    with st.spinner("Generating personalised feedback..."):
+        ai_text = llm_rewrite(payload)
+
+    st.markdown(ai_text)
 
 
 # -----------------------------------------------------
