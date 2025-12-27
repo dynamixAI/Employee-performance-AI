@@ -62,13 +62,91 @@ st.success(f"Logged in as: {user_id} ({role})")
 st.divider()
 
 # --------------------------------------------------
-# EMPLOYEE VIEW (placeholder)
+# EMPLOYEE VIEW
+# --------------------------------------------------
+# --------------------------------------------------
+# EMPLOYEE VIEW
 # --------------------------------------------------
 if role == "employee":
-    st.header("Employee Portal")
-    st.info("This area shows your personal performance insights only.")
-    st.write("✅ Secure access confirmed.")
-    st.write("➡️ Next: performance summary, AI coach, charts")
+    from engine import (
+        standard_df,
+        build_llm_payload,
+        llm_rewrite,
+        generate_employee_explanation,
+        answer_employee_question
+    )
+
+    st.header("Your Performance Overview")
+
+    # Extract employee row safely
+    emp_id = int(user_id.replace("EMP-", ""))
+    emp_row = standard_df[standard_df["employee_id"] == emp_id]
+
+    if emp_row.empty:
+        st.error("Your performance record could not be found.")
+        st.stop()
+
+    emp = emp_row.iloc[0]
+    explanation = generate_employee_explanation(emp)
+
+    # --- Summary ---
+    st.subheader("Status")
+    st.write(f"**{explanation['status']}**")
+
+    st.subheader("What happened")
+    st.write(explanation["summary"])
+
+    # --- Drivers ---
+    st.subheader("Why this happened")
+    if explanation["drivers"]:
+        for d in explanation["drivers"]:
+            st.write(f"- {d}")
+    else:
+        st.write("No major issues identified.")
+
+    # --- Strengths ---
+    st.subheader("Your strengths")
+    if explanation["strengths"]:
+        for s in explanation["strengths"]:
+            st.write(f"- {s}")
+    else:
+        st.write("No specific strengths identified in this period.")
+
+    # --- Actions ---
+    st.subheader("What to focus on next")
+    if explanation["recommended_actions"]:
+        for i, a in enumerate(explanation["recommended_actions"], 1):
+            st.write(f"{i}. {a}")
+    else:
+        st.write("Keep maintaining your current performance.")
+
+    st.divider()
+
+    # --------------------------------------------------
+    # EMPLOYEE AI COACH
+    # --------------------------------------------------
+    st.subheader("Ask your AI performance coach")
+
+    st.caption(
+        "You can ask things like:\n"
+        "- Why was my performance low?\n"
+        "- What should I focus on next month?\n"
+        "- What am I doing well?"
+    )
+
+    question = st.text_input("Your question")
+
+    if st.button("Ask AI"):
+        if not question.strip():
+            st.warning("Please enter a question.")
+        else:
+            payload = build_llm_payload(emp, user_question=question)
+
+            with st.spinner("Thinking..."):
+                response = llm_rewrite(payload)
+
+            st.markdown("### AI Feedback")
+            st.write(response)
 
 # --------------------------------------------------
 # MANAGER VIEW (placeholder)
