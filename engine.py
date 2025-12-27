@@ -20,7 +20,7 @@ else:
 # =========================================================
 # 2) OpenRouter client (import-safe)
 # =========================================================
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_API_KEY = os.getenv("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")
 client: Optional[OpenAI] = None
 
 if OPENROUTER_API_KEY:
