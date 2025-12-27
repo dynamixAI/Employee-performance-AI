@@ -192,10 +192,10 @@ def employee_dashboard(auth):
     if q:
         payload = build_llm_payload(row, user_question=q)
 
-    with st.spinner("Generating personalised feedback..."):
-        ai_text = llm_rewrite(payload)
+        with st.spinner("Generating personalised feedback..."):
+            ai_text = llm_rewrite(payload)
 
-    st.markdown(ai_text)
+        st.markdown(ai_text)
 
 
 # -----------------------------------------------------
