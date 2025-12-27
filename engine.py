@@ -447,14 +447,16 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct"
 client = None
 if OpenAI is not None and OPENROUTER_API_KEY:
     client = OpenAI(
-        api_key=OPENROUTER_API_KEY,
-        base_url="https://openrouter.ai/api/v1",
-        # NOTE: headers are optional; many people include them
-        default_headers={
-            "HTTP-Referer": os.getenv("APP_URL", "http://localhost"),
-            "X-Title": os.getenv("APP_NAME", "ai-employee-performance"),
-        },
-    )
+    base_url="https://openrouter.ai/api/v1",
+    api_key=OPENROUTER_API_KEY,
+    default_headers={
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL"),
+        "X-Title": os.getenv("OPENROUTER_SITE_NAME"),
+    },
+)
+
+print("✅ OpenRouter ready | model =", OPENROUTER_MODEL)
 
 EMPLOYEE_SYSTEM_PROMPT = """
 You are a supportive performance coach.
