@@ -132,7 +132,7 @@ def admin_dashboard(auth):
     # -------------------------------
     # REMOVE USER
     # -------------------------------
-    with tabs[1]:
+    with tabs[2]:
         st.subheader("Remove User")
         uid = st.text_input("User ID to remove")
         if st.button("Remove"):
@@ -145,7 +145,7 @@ def admin_dashboard(auth):
     # -------------------------------
     # RESET PASSWORD
     # -------------------------------
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("Reset Password")
         uid = st.text_input("User ID")
         new_pw = st.text_input("New Password", type="password")
@@ -159,7 +159,7 @@ def admin_dashboard(auth):
     # -------------------------------
     # VIEW DATA
     # -------------------------------
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Dataset Preview")
         st.dataframe(standard_df.head(50))
 
