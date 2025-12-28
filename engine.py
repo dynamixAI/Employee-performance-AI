@@ -393,40 +393,27 @@ def answer_employee_question(employee_row: pd.Series, question: str) -> Any:
 # 6) DETERMINISTIC FALLBACK FORMATTER (FROM COLAB)
 # =====================================================
 def deterministic_format(payload: Dict[str, Any]) -> str:
-    status = payload.get("performance_status", payload.get("performance_status", "Unknown"))
-    drivers = payload.get("drivers", [])
+    q = (payload.get("user_question") or "").lower()
+
     strengths = payload.get("strengths", [])
+    drivers = payload.get("drivers", [])
     actions = payload.get("recommended_actions", [])
+    status = payload.get("performance_status", "Unknown")
 
-    out = []
-    out.append(f"Status: {status}\n")
+    if any(k in q for k in ["well", "strength"]):
+        return "Here’s what you’re doing well:\n\n" + "\n".join(f"- {s}" for s in strengths)
 
-    out.append("What happened: Your performance for the selected period is classified as "
-               f"'{status}'.")
+    if any(k in q for k in ["why", "low", "problem"]):
+        return "Here’s why your performance is rated this way:\n\n" + "\n".join(f"- {d}" for d in drivers)
 
-    out.append("\nWhy:")
-    if drivers:
-        for d in drivers:
-            out.append(f"- {d}")
-    else:
-        out.append("- Not enough data to determine drivers")
+    if any(k in q for k in ["improve", "focus", "next"]):
+        return "Here’s what you should focus on next:\n\n" + "\n".join(f"- {a}" for a in actions)
 
-    out.append("\nStrengths:")
-    if strengths:
-        for s in strengths:
-            out.append(f"- {s}")
-    else:
-        out.append("- Not enough data to determine strengths")
-
-    out.append("\nWhat to do next:")
-    if actions:
-        for i, a in enumerate(actions, 1):
-            out.append(f"{i}. {a}")
-    else:
-        out.append("1. Track key metrics and request feedback to identify improvement areas.")
-
-    out.append("\nNote: This feedback is based solely on the provided data.")
-    return "\n".join(out)
+    return (
+        f"Status: {status}\n\n"
+        "Recommended next steps:\n"
+        + "\n".join(f"- {a}" for a in actions)
+    )
 
 # =====================================================
 # 7) AI LAYER (OpenRouter) – STRICT PROMPT FORMAT (FROM COLAB)
@@ -466,24 +453,24 @@ if OpenAI is not None and OPENROUTER_API_KEY:
 print("✅ OpenRouter ready | model =", OPENROUTER_MODELS)
 
 EMPLOYEE_SYSTEM_PROMPT = """
-You are a supportive performance coach.
+You are a supportive AI performance coach.
 
-RULES:
-- Use ONLY the information provided in the JSON payload.
-- Do NOT invent metrics, rankings, comparisons, or outcomes.
-- Do NOT mention other employees.
-- Be constructive and specific.
+Your task is to answer the employee's QUESTION directly.
 
-FORMAT YOUR RESPONSE EXACTLY AS:
-Status: <one short line>
-What happened: <2–3 lines>
-Why:
-- <bullet list>
-Strengths:
-- <bullet list>
-What to do next:
-1. <numbered list>
-Note: <one short line about data limits>
+Rules:
+- Always respond to the user's question.
+- Use ONLY the data provided in the payload.
+- Do NOT repeat generic summaries unless the question asks for it.
+- Adapt your response based on the intent of the question.
+
+Guidance:
+- If the question is about strengths → focus on strengths only.
+- If the question is about improvement → give clear, actionable advice.
+- If the question is "why" → explain the causes.
+- If the question is unclear → ask a clarifying question.
+
+Tone:
+Professional, supportive, and specific.
 """.strip()
 
 def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = None) -> Dict[str, Any]:
@@ -525,12 +512,15 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
     if client is None:
         return deterministic_format(payload)
 
-    user_prompt = (
-        "Here is the employee performance payload.\n"
-        "Provide a supportive, professional coaching explanation.\n"
-        "Do NOT invent metrics.\n\n"
-        + json.dumps(payload, indent=2)
-    )
+    user_prompt = f"""
+    The employee asked the following question:
+    \"{payload.get('user_question', '').strip()}\"
+    Answer THIS QUESTION directly.
+    Use only the data below
+    Do not invent metrics or assumptions.
+    Employee performance data:
+    {json.dumps(payload, indent=2)}
+    """
 
     for model in OPENROUTER_MODELS:
         try:
