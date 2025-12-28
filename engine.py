@@ -442,7 +442,14 @@ except ImportError:
     OpenAI = None
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct")
+OPENROUTER_MODELS = [
+    "meta-llama/llama-3.1-405b-instruct:free",
+    "google/gemini-2.0-flash-exp:free",
+    "google/gemma-3-27b-it:free",
+    "tngtech/deepseek-r1t-chimera:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "google/gemma-3-4b-it:free",
+]
 
 client = None
 if OpenAI is not None and OPENROUTER_API_KEY:
@@ -504,23 +511,49 @@ def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = No
     }
 
 def llm_rewrite(payload: Dict[str, Any]) -> str:
-    # If AI is not configured, deterministic fallback
+    """
+    Multi-model AI rewrite with ordered fallback.
+    AI is the primary path; deterministic is last resort.
+    """
+
     if client is None:
         return deterministic_format(payload)
 
-    user_prompt = "Here is the employee performance payload:\n" + json.dumps(payload, indent=2)
-    resp = client.chat.completions.create(
-        model=OPENROUTER_MODEL,
-        messages=[
-            {"role": "system", "content": EMPLOYEE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.3,
-        max_tokens=400
+    user_prompt = (
+        "Here is the employee performance payload.\n"
+        "Provide a supportive, professional coaching explanation.\n"
+        "Do NOT invent metrics.\n\n"
+        + json.dumps(payload, indent=2)
     )
-    text = resp.choices[0].message.content if resp.choices else ""
-    text = clean_ai_text(text or "")
-    return text if text else "[AI returned empty response]"
+
+    for model in OPENROUTER_MODELS:
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": EMPLOYEE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=450,
+            )
+
+            if not resp.choices:
+                continue
+
+            text = resp.choices[0].message.content.strip()
+            text = clean_ai_text(text)
+
+            if text:
+                print(f"✅ AI response from {model}")
+                return text
+
+        except Exception as e:
+            print(f"⚠️ Model failed → {model} | {type(e).__name__}")
+            continue
+
+    print("❌ All AI models failed — using deterministic fallback")
+    return deterministic_format(payload)
 
 # =====================================================
 # 8) DATA PIPELINE HELPERS – BUILD STANDARD_DF (FROM RAW)
