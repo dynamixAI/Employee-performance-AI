@@ -209,21 +209,97 @@ def manager_dashboard(auth):
     if st.sidebar.button("Logout"):
         logout()
 
-    st.title("👥 Manager Overview")
+    st.title("📊 Manager Performance Dashboard")
 
-    df_view = resolve_user_data_view(auth, standard_df)
+    df = standard_df.copy()
 
-    if df_view.empty:
-        st.warning("No team data assigned.")
-        return
+    # -------------------
+    # FILTERS
+    # -------------------
+    st.subheader("🔎 Filters")
 
-    st.subheader("Team Snapshot")
-    st.dataframe(df_view[["employee_id", "performance_status", "output_score"]].head(50))
+    col1, col2, col3 = st.columns(3)
 
-    st.subheader("AI Team Summary")
-    with st.spinner("Generating summary..."):
-        summary = manager_ai_summary(df_view)
-    st.write(summary)
+    with col1:
+        sector = st.multiselect(
+            "Sector",
+            options=sorted(df["sector"].dropna().unique())
+        )
+
+    with col2:
+        status = st.multiselect(
+            "Performance Status",
+            options=sorted(df["performance_status"].dropna().unique())
+        )
+
+    with col3:
+        min_quality = st.slider(
+            "Minimum Quality Score",
+            float(df["quality_score"].min()),
+            float(df["quality_score"].max()),
+            float(df["quality_score"].min())
+        )
+
+    if sector:
+        df = df[df["sector"].isin(sector)]
+    if status:
+        df = df[df["performance_status"].isin(status)]
+    df = df[df["quality_score"] >= min_quality]
+
+    # -------------------
+    # DATA VIEW
+    # -------------------
+    st.subheader("📋 Filtered Employees")
+    st.dataframe(
+        df[
+            [
+                "employee_id",
+                "sector",
+                "role",
+                "performance_status",
+                "output_score",
+                "quality_score",
+            ]
+        ],
+        width="stretch"
+    )
+
+    # -------------------
+    # EMPLOYEE SEARCH
+    # -------------------
+    st.subheader("👤 View Individual Employee")
+
+    emp_id = st.selectbox(
+        "Select Employee ID",
+        options=df["employee_id"].tolist()
+    )
+
+    emp_row = df[df["employee_id"] == emp_id].iloc[0]
+
+    st.markdown("### Employee Metrics")
+    st.metric("Performance Status", emp_row["performance_status"])
+    st.metric("Output Score", round(emp_row["output_score"], 2))
+    st.metric("Quality Score", emp_row["quality_score"])
+    st.metric("Development Score", emp_row["development_score"])
+
+    # -------------------
+    # MANAGER AI SUMMARY
+    # -------------------
+    st.subheader("🤖 Ask Manager AI")
+
+    q = st.text_input(
+        "Ask a question about the team or this employee",
+        placeholder="e.g. Who needs support?"
+    )
+
+    if q:
+        payload = build_manager_payload(df, question=q)
+
+        with st.spinner("Analysing team performance..."):
+            ai_text = llm_rewrite(payload)
+
+        st.markdown(ai_text)
+
 
 
 # -----------------------------------------------------
