@@ -186,16 +186,19 @@ def employee_dashboard(auth):
     st.metric("Output Score", round(row["output_score"], 2))
     st.metric("Quality Score", row["quality_score"])
 
+    # ✅ AI interaction MUST be inside the function
     st.subheader("Ask your AI coach")
-    q = st.text_input("Ask a question (e.g. How can I improve?)")
+
+    q = st.text_input("Ask your AI coach")
 
     if q:
         payload = build_llm_payload(row, user_question=q)
 
-        with st.spinner("Generating personalised feedback..."):
+        with st.spinner("Generating feedback..."):
             ai_text = llm_rewrite(payload)
 
         st.markdown(ai_text)
+
 
 
 # -----------------------------------------------------
