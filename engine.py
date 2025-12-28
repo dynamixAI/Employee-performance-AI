@@ -561,7 +561,29 @@ def build_manager_payload(df: pd.DataFrame, question: str) -> Dict[str, Any]:
 # -------------------------
 # AI GATEWAY (EMPLOYEE + MANAGER)
 # -------------------------
+###################################
+def compress_manager_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Reduce manager payload to AI-safe summary.
+    Prevents silent model failures.
+    """
+    summary = payload.get("summary", {})
+    risks = payload.get("risk_groups", {})
 
+    return {
+        "level": "manager",
+        "question": payload.get("user_question"),
+        "team_overview": {
+            "total_employees": summary.get("total_employees"),
+            "avg_output_score": summary.get("avg_output_score"),
+            "avg_quality_score": summary.get("avg_quality_score"),
+            "status_breakdown": summary.get("status_breakdown"),
+        },
+        "risk_indicators": risks,
+    }
+
+
+###################################
 def llm_rewrite(payload: Dict[str, Any]) -> str:
     """
     Shared AI gateway for employee and manager.
@@ -577,6 +599,10 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
         if payload.get("level") == "manager"
         else EMPLOYEE_SYSTEM_PROMPT
     )
+
+    if payload.get("level") == "manager":
+    payload = compress_manager_payload(payload)
+
 
     # ---- user prompt routing ----
     if payload.get("level") == "manager":
