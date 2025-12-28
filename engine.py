@@ -571,14 +571,29 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
     if client is None:
         return deterministic_format(payload)
 
+    # ---- system prompt routing ----
     system_prompt = (
         MANAGER_SYSTEM_PROMPT
         if payload.get("level") == "manager"
         else EMPLOYEE_SYSTEM_PROMPT
     )
 
-    user_prompt = f"""
-The user asked the following question:
+    # ---- user prompt routing ----
+    if payload.get("level") == "manager":
+        user_prompt = f"""
+The manager asked the following question:
+\"{payload.get('user_question', '').strip()}\"
+
+Use the aggregated team data below to answer.
+Focus on patterns, risks, and priorities.
+Do NOT invent employee-level details.
+
+Team data:
+{json.dumps(payload, indent=2)}
+"""
+    else:
+        user_prompt = f"""
+The employee asked the following question:
 \"{payload.get('user_question', '').strip()}\"
 
 Answer THIS QUESTION directly.
@@ -586,10 +601,11 @@ Answer THIS QUESTION directly.
 Use only the data below.
 Do not invent metrics or assumptions.
 
-Data payload:
+Employee data:
 {json.dumps(payload, indent=2)}
 """
 
+    # ---- multi-model fallback ----
     for model in OPENROUTER_MODELS:
         try:
             resp = client.chat.completions.create(
