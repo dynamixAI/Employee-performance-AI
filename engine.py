@@ -513,7 +513,7 @@ def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = No
 def llm_rewrite(payload: Dict[str, Any]) -> str:
     """
     Multi-model AI rewrite with ordered fallback.
-    AI is the primary path; deterministic is last resort.
+    Never crashes the app.
     """
 
     if client is None:
@@ -549,6 +549,7 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
                 return text
 
         except Exception as e:
+            # IMPORTANT: catch auth, quota, timeout, ANY failure
             print(f"⚠️ Model failed → {model} | {type(e).__name__}")
             continue
 
