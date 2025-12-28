@@ -491,23 +491,29 @@ def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = No
     if not isinstance(expl, dict):
         expl = generate_employee_explanation(employee_row)
 
-    # ✅ CHANGED: do NOT force int; allow string/UUID employee IDs
     return {
         "employee_id": str(employee_row.get("employee_id")),
         "sector": str(employee_row.get("sector", "")),
         "role": str(employee_row.get("role", "")),
         "date": str(employee_row.get("date", "")),
-        "performance_status": expl.get("status", employee_row.get("performance_status", "Needs Improvement")),
+        "performance_status": expl.get(
+            "status",
+            employee_row.get("performance_status", "Needs Improvement")
+        ),
         "metrics": {
             "output_score": float(employee_row.get("output_score", 0)),
             "quality_score": float(employee_row.get("quality_score", 0)),
             "development_score": float(employee_row.get("development_score", 0)),
-            "sick_days": float(employee_row.get("Sick_Days", employee_row.get("sick_days", 0)) or 0),
+            "sick_days": float(
+                employee_row.get("Sick_Days", employee_row.get("sick_days", 0)) or 0
+            ),
         },
         "drivers": expl.get("drivers", []),
         "strengths": expl.get("strengths", []),
         "recommended_actions": expl.get("recommended_actions", []),
-        "question": user_question,
+
+        
+        "user_question": user_question,
     }
 
 def llm_rewrite(payload: Dict[str, Any]) -> str:
