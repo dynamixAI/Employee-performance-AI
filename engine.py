@@ -417,19 +417,25 @@ def deterministic_format(payload: Dict[str, Any]) -> str:
     )
 
 # =====================================================
-# 7) AI LAYER (OpenRouter) – STRICT PROMPT FORMAT (FROM COLAB)
+# 7) AI LAYER (OpenRouter) – SHARED AI GATEWAY
 # =====================================================
+
 def clean_ai_text(text: str) -> str:
     for token in ["[B_INST]", "[/B_INST]", "<s>", "</s>", "[OUT]", "[/OUT]", "[/s]"]:
         text = text.replace(token, "")
     return text.strip()
 
+
+# -------------------------
+# OpenRouter client
+# -------------------------
 try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
 OPENROUTER_MODELS = [
     "meta-llama/llama-3.1-405b-instruct:free",
     "google/gemini-2.0-flash-exp:free",
@@ -442,16 +448,20 @@ OPENROUTER_MODELS = [
 client = None
 if OpenAI is not None and OPENROUTER_API_KEY:
     client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-    default_headers={
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL"),
-        "X-Title": os.getenv("OPENROUTER_SITE_NAME"),
-    },
-)
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+        default_headers={
+            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL"),
+            "X-Title": os.getenv("OPENROUTER_SITE_NAME"),
+        },
+    )
 
-print("✅ OpenRouter ready | model =", OPENROUTER_MODELS)
+print("✅ OpenRouter ready | models =", OPENROUTER_MODELS)
+
+
+# -------------------------
+# SYSTEM PROMPTS
+# -------------------------
 
 EMPLOYEE_SYSTEM_PROMPT = """
 You are a supportive AI performance coach.
@@ -474,12 +484,39 @@ Tone:
 Professional, supportive, and specific.
 """.strip()
 
-def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = None) -> Dict[str, Any]:
+
+MANAGER_SYSTEM_PROMPT = """
+You are an AI People Analytics advisor for managers.
+
+Your task:
+- Answer the manager's QUESTION using aggregated data.
+- Identify patterns, risks, and priorities.
+- Focus on support and improvement, not blame.
+
+Rules:
+- Use ONLY the data in the payload.
+- Do NOT invent individual employee details.
+- Provide clear, actionable recommendations.
+
+Tone:
+Professional, strategic, concise.
+""".strip()
+
+
+# -------------------------
+# PAYLOAD BUILDERS
+# -------------------------
+
+def build_llm_payload(
+    employee_row: pd.Series,
+    user_question: Optional[str] = None
+) -> Dict[str, Any]:
     expl = employee_row.get("employee_explanation")
     if not isinstance(expl, dict):
         expl = generate_employee_explanation(employee_row)
 
     return {
+        "level": "employee",
         "employee_id": str(employee_row.get("employee_id")),
         "sector": str(employee_row.get("sector", "")),
         "role": str(employee_row.get("role", "")),
@@ -499,36 +536,66 @@ def build_llm_payload(employee_row: pd.Series, user_question: Optional[str] = No
         "drivers": expl.get("drivers", []),
         "strengths": expl.get("strengths", []),
         "recommended_actions": expl.get("recommended_actions", []),
-
-        
         "user_question": user_question,
     }
 
+
+def build_manager_payload(df: pd.DataFrame, question: str) -> Dict[str, Any]:
+    return {
+        "level": "manager",
+        "user_question": question,
+        "summary": {
+            "total_employees": int(len(df)),
+            "avg_output_score": float(df["output_score"].mean()),
+            "avg_quality_score": float(df["quality_score"].mean()),
+            "status_breakdown": df["performance_status"].value_counts().to_dict(),
+        },
+        "risk_groups": {
+            "low_output": int((df["output_score"] < df["output_score"].quantile(0.25)).sum()),
+            "low_quality": int((df["quality_score"] < df["quality_score"].quantile(0.25)).sum()),
+            "high_sick_days": int((df["Sick_Days"] > df["Sick_Days"].quantile(0.75)).sum()),
+        },
+    }
+
+
+# -------------------------
+# AI GATEWAY (EMPLOYEE + MANAGER)
+# -------------------------
+
 def llm_rewrite(payload: Dict[str, Any]) -> str:
     """
-    Multi-model AI rewrite with ordered fallback.
-    Never crashes the app.
+    Shared AI gateway for employee and manager.
+    Multi-model fallback, never crashes.
     """
 
     if client is None:
         return deterministic_format(payload)
 
+    system_prompt = (
+        MANAGER_SYSTEM_PROMPT
+        if payload.get("level") == "manager"
+        else EMPLOYEE_SYSTEM_PROMPT
+    )
+
     user_prompt = f"""
-    The employee asked the following question:
-    \"{payload.get('user_question', '').strip()}\"
-    Answer THIS QUESTION directly.
-    Use only the data below
-    Do not invent metrics or assumptions.
-    Employee performance data:
-    {json.dumps(payload, indent=2)}
-    """
+The user asked the following question:
+\"{payload.get('user_question', '').strip()}\"
+
+Answer THIS QUESTION directly.
+
+Use only the data below.
+Do not invent metrics or assumptions.
+
+Data payload:
+{json.dumps(payload, indent=2)}
+"""
 
     for model in OPENROUTER_MODELS:
         try:
             resp = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": EMPLOYEE_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.3,
@@ -546,12 +613,12 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
                 return text
 
         except Exception as e:
-            # IMPORTANT: catch auth, quota, timeout, ANY failure
             print(f"⚠️ Model failed → {model} | {type(e).__name__}")
             continue
 
     print("❌ All AI models failed — using deterministic fallback")
     return deterministic_format(payload)
+
 
 # =====================================================
 # 8) DATA PIPELINE HELPERS – BUILD STANDARD_DF (FROM RAW)
@@ -785,38 +852,41 @@ def format_manager_numbers(insights: Dict[str, Any]) -> Dict[str, Any]:
         "common_issues": insights.get("common_issues", {}),
     }
 
-def build_manager_ai_payload(df: pd.DataFrame) -> Dict[str, Any]:
-    insights = manager_team_insights(df)
-    formatted = format_manager_numbers(insights)
-    coaching = manager_coaching_actions(df, top_n_needing_support=20)
+def build_manager_payload(df: pd.DataFrame, question: str) -> dict:
     return {
-        "team_size": formatted["team_size"],
-        "needs_improvement_pct": formatted["needs_improvement_pct"],
-        "on_track_pct": formatted["on_track_pct"],
-        "average_output_score": formatted["avg_output_score"],
-        "most_common_issues": formatted["common_issues"],
-        "coaching_priorities_top20": coaching,
+        "level": "manager",
+        "question": question,
+        "summary": {
+            "total_employees": int(len(df)),
+            "avg_output_score": float(df["output_score"].mean()),
+            "avg_quality_score": float(df["quality_score"].mean()),
+            "status_breakdown": df["performance_status"]
+            .value_counts()
+            .to_dict(),
+        },
+        "risk_groups": {
+            "low_output": int((df["output_score"] < df["output_score"].quantile(0.25)).sum()),
+            "low_quality": int((df["quality_score"] < df["quality_score"].quantile(0.25)).sum()),
+            "high_sick_days": int((df["Sick_Days"] > df["Sick_Days"].quantile(0.75)).sum()),
+        },
     }
 
-MANAGER_PROMPT = """
-You are an HR analytics advisor.
 
-TASK:
-Write a concise private management summary based on the team data.
+MANAGER_SYSTEM_PROMPT = """
+You are an AI People Analytics advisor for managers.
 
-RULES:
-- Use the provided numbers exactly as written.
-- Do NOT estimate, infer, or calculate new percentages.
-- Do NOT invent team size or scale.
-- Do NOT list every employee (use coaching priorities already limited).
-- Focus on interpretation and coaching actions only.
-- Do NOT shame individuals.
+Your task:
+- Answer the manager's QUESTION using the aggregated data provided.
+- Identify patterns, risks, and priorities.
+- Focus on support and improvement, not blame.
 
-FORMAT:
-Team Overview:
-Key Issues:
-Who Needs Support (high level):
-Recommended Coaching Actions:
+Rules:
+- Use ONLY the data in the payload.
+- Do NOT invent employee details.
+- Provide actionable recommendations.
+
+Tone:
+Professional, strategic, concise.
 """.strip()
 
 def manager_ai_summary(df: pd.DataFrame) -> str:
