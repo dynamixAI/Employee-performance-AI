@@ -463,7 +463,7 @@ if OpenAI is not None and OPENROUTER_API_KEY:
     },
 )
 
-print("✅ OpenRouter ready | model =", OPENROUTER_MODEL)
+print("✅ OpenRouter ready | model =", OPENROUTER_MODELS)
 
 EMPLOYEE_SYSTEM_PROMPT = """
 You are a supportive performance coach.
