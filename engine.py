@@ -600,15 +600,13 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
         else EMPLOYEE_SYSTEM_PROMPT
     )
 
+    # ---- compress manager payload BEFORE sending to AI ----
     if payload.get("level") == "manager":
-    payload = compress_manager_payload(payload)
+        payload = compress_manager_payload(payload)
 
-
-    # ---- user prompt routing ----
-    if payload.get("level") == "manager":
         user_prompt = f"""
 The manager asked the following question:
-\"{payload.get('user_question', '').strip()}\"
+\"{payload.get('question', '').strip()}\"
 
 Use the aggregated team data below to answer.
 Focus on patterns, risks, and priorities.
@@ -660,7 +658,6 @@ Employee data:
 
     print("❌ All AI models failed — using deterministic fallback")
     return deterministic_format(payload)
-
 
 # =====================================================
 # 8) DATA PIPELINE HELPERS – BUILD STANDARD_DF (FROM RAW)
