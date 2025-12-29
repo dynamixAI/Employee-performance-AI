@@ -415,9 +415,9 @@ def deterministic_format(payload: Dict[str, Any]) -> str:
         "Recommended next steps:\n"
         + "\n".join(f"- {a}" for a in actions)
     )
-# -------------------------
-# 7 AI GATEWAY (EMPLOYEE + MANAGER)
-# -------------------------
+# =====================================================
+# 7) AI GATEWAY (EMPLOYEE + MANAGER)
+# =====================================================
 
 def build_llm_payload(
     employee_row: pd.Series,
@@ -459,15 +459,13 @@ def build_llm_payload(
 
 def compress_manager_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Reduce manager payload size for LLM safety.
-    Keeps only aggregated + risk-relevant fields.
+    Reduce manager payload to AI-safe summary.
+    CRITICAL: keep user_question key.
     """
-    if not isinstance(payload, dict):
-        return payload
 
     return {
         "level": "manager",
-        "question": payload.get("question"),
+        "user_question": payload.get("user_question", ""),
         "summary": payload.get("summary", {}),
         "risk_groups": payload.get("risk_groups", {}),
     }
@@ -479,31 +477,31 @@ def llm_rewrite(payload: Dict[str, Any]) -> str:
     Multi-model fallback, never crashes the app.
     """
 
-    # ---------- deterministic fallback ----------
+    # ---- deterministic fallback ----
     if client is None:
         return deterministic_format(payload)
 
     is_manager = payload.get("level") == "manager"
 
-    # ---------- system prompt routing ----------
+    # ---- system prompt routing ----
     system_prompt = (
         MANAGER_SYSTEM_PROMPT
         if is_manager
         else EMPLOYEE_SYSTEM_PROMPT
     )
 
-    # ---------- payload compression ----------
+    # ---- compress manager payload BEFORE prompting ----
     safe_payload = (
         compress_manager_payload(payload)
         if is_manager
         else payload
     )
 
-    # ---------- user prompt ----------
+    # ---- user prompt ----
     if is_manager:
         user_prompt = f"""
 The manager asked the following question:
-"{payload.get('question', '').strip()}"
+\"{safe_payload.get('user_question', '').strip()}\"
 
 Use ONLY the aggregated team data below.
 Focus on patterns, risks, and priorities.
@@ -515,7 +513,7 @@ Team data:
     else:
         user_prompt = f"""
 The employee asked the following question:
-"{payload.get('user_question', '').strip()}"
+\"{safe_payload.get('user_question', '').strip()}\"
 
 Answer THIS QUESTION directly.
 Use ONLY the data below.
@@ -525,7 +523,7 @@ Employee data:
 {json.dumps(safe_payload, indent=2)}
 """
 
-    # ---------- multi-model fallback ----------
+    # ---- multi-model fallback ----
     for model in OPENROUTER_MODELS:
         try:
             resp = client.chat.completions.create(
@@ -552,7 +550,6 @@ Employee data:
             print(f"⚠️ Model failed → {model} | {type(e).__name__}")
             continue
 
-    # ---------- final fallback ----------
     print("❌ All AI models failed — using deterministic fallback")
     return deterministic_format(payload)
 
