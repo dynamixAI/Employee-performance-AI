@@ -417,8 +417,11 @@ def deterministic_format(payload: Dict[str, Any]) -> str:
     )
 
 # =====================================================
-# 7) AI LAYER (OpenRouter) – SHARED AI GATEWAY
+# 7) # =====================================================
+# AI GATEWAY (EMPLOYEE + MANAGER) – SAFE + FALLBACK
 # =====================================================
+
+
 
 def clean_ai_text(text: str) -> str:
     for token in ["[B_INST]", "[/B_INST]", "<s>", "</s>", "[OUT]", "[/OUT]", "[/s]"]:
@@ -426,153 +429,21 @@ def clean_ai_text(text: str) -> str:
     return text.strip()
 
 
-# -------------------------
-# OpenRouter client
-# -------------------------
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-
-OPENROUTER_MODELS = [
-    "meta-llama/llama-3.1-405b-instruct:free",
-    "google/gemini-2.0-flash-exp:free",
-    "google/gemma-3-27b-it:free",
-    "tngtech/deepseek-r1t-chimera:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "google/gemma-3-4b-it:free",
-]
-
-client = None
-if OpenAI is not None and OPENROUTER_API_KEY:
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
-        default_headers={
-            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL"),
-            "X-Title": os.getenv("OPENROUTER_SITE_NAME"),
-        },
-    )
-
-print("✅ OpenRouter ready | models =", OPENROUTER_MODELS)
-
-
-# -------------------------
-# SYSTEM PROMPTS
-# -------------------------
-
-EMPLOYEE_SYSTEM_PROMPT = """
-You are a supportive AI performance coach.
-
-Your task is to answer the employee's QUESTION directly.
-
-Rules:
-- Always respond to the user's question.
-- Use ONLY the data provided in the payload.
-- Do NOT repeat generic summaries unless the question asks for it.
-- Adapt your response based on the intent of the question.
-
-Guidance:
-- If the question is about strengths → focus on strengths only.
-- If the question is about improvement → give clear, actionable advice.
-- If the question is "why" → explain the causes.
-- If the question is unclear → ask a clarifying question.
-
-Tone:
-Professional, supportive, and specific.
-""".strip()
-
-
-MANAGER_SYSTEM_PROMPT = """
-You are an AI People Analytics advisor for managers.
-
-Your task:
-- Answer the manager's QUESTION using aggregated data.
-- Identify patterns, risks, and priorities.
-- Focus on support and improvement, not blame.
-
-Rules:
-- Use ONLY the data in the payload.
-- Do NOT invent individual employee details.
-- Provide clear, actionable recommendations.
-
-Tone:
-Professional, strategic, concise.
-""".strip()
-
-
-# -------------------------
-# PAYLOAD BUILDERS
-# -------------------------
-
-def build_llm_payload(
-    employee_row: pd.Series,
-    user_question: Optional[str] = None
-) -> Dict[str, Any]:
-    expl = employee_row.get("employee_explanation")
-    if not isinstance(expl, dict):
-        expl = generate_employee_explanation(employee_row)
-
-    return {
-        "level": "employee",
-        "employee_id": str(employee_row.get("employee_id")),
-        "sector": str(employee_row.get("sector", "")),
-        "role": str(employee_row.get("role", "")),
-        "date": str(employee_row.get("date", "")),
-        "performance_status": expl.get(
-            "status",
-            employee_row.get("performance_status", "Needs Improvement")
-        ),
-        "metrics": {
-            "output_score": float(employee_row.get("output_score", 0)),
-            "quality_score": float(employee_row.get("quality_score", 0)),
-            "development_score": float(employee_row.get("development_score", 0)),
-            "sick_days": float(
-                employee_row.get("Sick_Days", employee_row.get("sick_days", 0)) or 0
-            ),
-        },
-        "drivers": expl.get("drivers", []),
-        "strengths": expl.get("strengths", []),
-        "recommended_actions": expl.get("recommended_actions", []),
-        "user_question": user_question,
-    }
-
-
-def build_manager_payload(df: pd.DataFrame, question: str) -> Dict[str, Any]:
-    return {
-        "level": "manager",
-        "user_question": question,
-        "summary": {
-            "total_employees": int(len(df)),
-            "avg_output_score": float(df["output_score"].mean()),
-            "avg_quality_score": float(df["quality_score"].mean()),
-            "status_breakdown": df["performance_status"].value_counts().to_dict(),
-        },
-        "risk_groups": {
-            "low_output": int((df["output_score"] < df["output_score"].quantile(0.25)).sum()),
-            "low_quality": int((df["quality_score"] < df["quality_score"].quantile(0.25)).sum()),
-            "high_sick_days": int((df["Sick_Days"] > df["Sick_Days"].quantile(0.75)).sum()),
-        },
-    }
-
-
-# -------------------------
-# AI GATEWAY (EMPLOYEE + MANAGER)
-# -------------------------
-###################################
+# -----------------------------------------------------
+# Compress manager payload (CRITICAL FOR MODEL SAFETY)
+# -----------------------------------------------------
 def compress_manager_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Reduce manager payload to AI-safe summary.
-    Prevents silent model failures.
+    Prevents silent failures on free models.
     """
+
     summary = payload.get("summary", {})
     risks = payload.get("risk_groups", {})
 
     return {
         "level": "manager",
-        "question": payload.get("user_question"),
+        "question": payload.get("user_question", ""),
         "team_overview": {
             "total_employees": summary.get("total_employees"),
             "avg_output_score": summary.get("avg_output_score"),
@@ -583,24 +454,26 @@ def compress_manager_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-###################################
+# -----------------------------------------------------
+# Main AI gateway
+# -----------------------------------------------------
 def llm_rewrite(payload: Dict[str, Any]) -> str:
     """
     Shared AI gateway for employee and manager.
-    Multi-model fallback, never crashes.
+    Multi-model fallback. Never crashes the app.
     """
 
+    # ---------- deterministic fallback ----------
     if client is None:
         return deterministic_format(payload)
 
-    # ---- system prompt routing ----
-    system_prompt = (
-        MANAGER_SYSTEM_PROMPT
-        if payload.get("level") == "manager"
-        else EMPLOYEE_SYSTEM_PROMPT
-    )
+    # ---------- system prompt ----------
+    if payload.get("level") == "manager":
+        system_prompt = MANAGER_SYSTEM_PROMPT
+    else:
+        system_prompt = EMPLOYEE_SYSTEM_PROMPT
 
-    # ---- compress manager payload BEFORE sending to AI ----
+    # ---------- user prompt + payload routing ----------
     if payload.get("level") == "manager":
         payload = compress_manager_payload(payload)
 
@@ -610,7 +483,7 @@ The manager asked the following question:
 
 Use the aggregated team data below to answer.
 Focus on patterns, risks, and priorities.
-Do NOT invent employee-level details.
+Do NOT invent individual employee details.
 
 Team data:
 {json.dumps(payload, indent=2)}
@@ -629,7 +502,7 @@ Employee data:
 {json.dumps(payload, indent=2)}
 """
 
-    # ---- multi-model fallback ----
+    # ---------- multi-model execution ----------
     for model in OPENROUTER_MODELS:
         try:
             resp = client.chat.completions.create(
@@ -645,10 +518,13 @@ Employee data:
             if not resp.choices:
                 continue
 
-            text = resp.choices[0].message.content.strip()
+            text = resp.choices[0].message.content
+            if not text:
+                continue
+
             text = clean_ai_text(text)
 
-            if text:
+            if text.strip():
                 print(f"✅ AI response from {model}")
                 return text
 
@@ -656,8 +532,10 @@ Employee data:
             print(f"⚠️ Model failed → {model} | {type(e).__name__}")
             continue
 
+    # ---------- final fallback ----------
     print("❌ All AI models failed — using deterministic fallback")
     return deterministic_format(payload)
+
 
 # =====================================================
 # 8) DATA PIPELINE HELPERS – BUILD STANDARD_DF (FROM RAW)
