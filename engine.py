@@ -415,94 +415,79 @@ def deterministic_format(payload: Dict[str, Any]) -> str:
         "Recommended next steps:\n"
         + "\n".join(f"- {a}" for a in actions)
     )
+# -------------------------
+# 7 AI GATEWAY (EMPLOYEE + MANAGER)
+# -------------------------
 
-# =====================================================
-# 7) # =====================================================
-# AI GATEWAY (EMPLOYEE + MANAGER) – SAFE + FALLBACK
-# =====================================================
-
-
-
-def clean_ai_text(text: str) -> str:
-    for token in ["[B_INST]", "[/B_INST]", "<s>", "</s>", "[OUT]", "[/OUT]", "[/s]"]:
-        text = text.replace(token, "")
-    return text.strip()
-
-
-# -----------------------------------------------------
-# Compress manager payload (CRITICAL FOR MODEL SAFETY)
-# -----------------------------------------------------
 def compress_manager_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Reduce manager payload to AI-safe summary.
-    Prevents silent failures on free models.
+    Reduce manager payload size for LLM safety.
+    Keeps only aggregated + risk-relevant fields.
     """
-
-    summary = payload.get("summary", {})
-    risks = payload.get("risk_groups", {})
+    if not isinstance(payload, dict):
+        return payload
 
     return {
         "level": "manager",
-        "question": payload.get("user_question", ""),
-        "team_overview": {
-            "total_employees": summary.get("total_employees"),
-            "avg_output_score": summary.get("avg_output_score"),
-            "avg_quality_score": summary.get("avg_quality_score"),
-            "status_breakdown": summary.get("status_breakdown"),
-        },
-        "risk_indicators": risks,
+        "question": payload.get("question"),
+        "summary": payload.get("summary", {}),
+        "risk_groups": payload.get("risk_groups", {}),
     }
 
 
-# -----------------------------------------------------
-# Main AI gateway
-# -----------------------------------------------------
 def llm_rewrite(payload: Dict[str, Any]) -> str:
     """
     Shared AI gateway for employee and manager.
-    Multi-model fallback. Never crashes the app.
+    Multi-model fallback, never crashes the app.
     """
 
     # ---------- deterministic fallback ----------
     if client is None:
         return deterministic_format(payload)
 
-    # ---------- system prompt ----------
-    if payload.get("level") == "manager":
-        system_prompt = MANAGER_SYSTEM_PROMPT
-    else:
-        system_prompt = EMPLOYEE_SYSTEM_PROMPT
+    is_manager = payload.get("level") == "manager"
 
-    # ---------- user prompt + payload routing ----------
-    if payload.get("level") == "manager":
-        payload = compress_manager_payload(payload)
+    # ---------- system prompt routing ----------
+    system_prompt = (
+        MANAGER_SYSTEM_PROMPT
+        if is_manager
+        else EMPLOYEE_SYSTEM_PROMPT
+    )
 
+    # ---------- payload compression ----------
+    safe_payload = (
+        compress_manager_payload(payload)
+        if is_manager
+        else payload
+    )
+
+    # ---------- user prompt ----------
+    if is_manager:
         user_prompt = f"""
 The manager asked the following question:
-\"{payload.get('question', '').strip()}\"
+"{payload.get('question', '').strip()}"
 
-Use the aggregated team data below to answer.
+Use ONLY the aggregated team data below.
 Focus on patterns, risks, and priorities.
 Do NOT invent individual employee details.
 
 Team data:
-{json.dumps(payload, indent=2)}
+{json.dumps(safe_payload, indent=2)}
 """
     else:
         user_prompt = f"""
 The employee asked the following question:
-\"{payload.get('user_question', '').strip()}\"
+"{payload.get('user_question', '').strip()}"
 
 Answer THIS QUESTION directly.
-
-Use only the data below.
-Do not invent metrics or assumptions.
+Use ONLY the data below.
+Do NOT invent metrics or assumptions.
 
 Employee data:
-{json.dumps(payload, indent=2)}
+{json.dumps(safe_payload, indent=2)}
 """
 
-    # ---------- multi-model execution ----------
+    # ---------- multi-model fallback ----------
     for model in OPENROUTER_MODELS:
         try:
             resp = client.chat.completions.create(
@@ -518,10 +503,7 @@ Employee data:
             if not resp.choices:
                 continue
 
-            text = resp.choices[0].message.content
-            if not text:
-                continue
-
+            text = resp.choices[0].message.content or ""
             text = clean_ai_text(text)
 
             if text.strip():
@@ -535,6 +517,7 @@ Employee data:
     # ---------- final fallback ----------
     print("❌ All AI models failed — using deterministic fallback")
     return deterministic_format(payload)
+
 
 
 # =====================================================
