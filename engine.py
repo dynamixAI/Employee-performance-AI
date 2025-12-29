@@ -418,6 +418,52 @@ def deterministic_format(payload: Dict[str, Any]) -> str:
 # =====================================================
 # 7) AI GATEWAY (EMPLOYEE + MANAGER)
 # =====================================================
+def build_manager_payload(
+    df: pd.DataFrame,
+    question: str
+) -> Dict[str, Any]:
+    """
+    Build manager-level AI payload using aggregated data only.
+    REQUIRED by manager_dashboard in app.py
+    """
+
+    if df is None or df.empty:
+        return {
+            "level": "manager",
+            "user_question": question,
+            "summary": {},
+            "risk_groups": {},
+        }
+
+    return {
+        "level": "manager",
+        "user_question": question,
+        "summary": {
+            "total_employees": int(len(df)),
+            "avg_output_score": float(
+                pd.to_numeric(df["output_score"], errors="coerce").mean()
+            ),
+            "avg_quality_score": float(
+                pd.to_numeric(df["quality_score"], errors="coerce").mean()
+            ),
+            "status_breakdown": (
+                df["performance_status"]
+                .value_counts()
+                .to_dict()
+            ),
+        },
+        "risk_groups": {
+            "low_output": int(
+                (df["output_score"] < df["output_score"].quantile(0.25)).sum()
+            ),
+            "low_quality": int(
+                (df["quality_score"] < df["quality_score"].quantile(0.25)).sum()
+            ),
+            "high_sick_days": int(
+                (df["Sick_Days"] > df["Sick_Days"].quantile(0.75)).sum()
+            ),
+        },
+    }
 
 def build_llm_payload(
     employee_row: pd.Series,
